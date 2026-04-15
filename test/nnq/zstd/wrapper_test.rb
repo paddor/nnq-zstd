@@ -40,6 +40,40 @@ describe NNQ::Zstd::Wrapper do
   end
 
 
+  # Regression for 8ca0a50: Wrapper#send_request used to return the
+  # encoded reply wire untouched, so a caller doing `nnq req -z`
+  # against a compressing REP saw the NUL preamble + payload
+  # (rendered as "....HELLO") instead of the plaintext. The reply
+  # must be decoded before being returned.
+  it "Wrapper#send_request decodes the reply body" do
+    ep = "inproc://nnq-zstd-req-#{SecureRandom.hex(6)}"
+    rep_raw = NNQ::REP0.new
+    req_raw = NNQ::REQ0.new
+    rep_raw.bind(ep)
+    req_raw.connect(ep)
+
+    rep = NNQ::Zstd.wrap(rep_raw, level: -3)
+    req = NNQ::Zstd.wrap(req_raw, level: -3)
+    begin
+      server = Thread.new do
+        body = rep.receive
+        rep.send_reply(body.upcase)
+      end
+
+      reply = req.send_request("hello")
+      server.join
+
+      # Must be the plaintext reply, not the NUL-prefixed wire.
+      assert_equal "HELLO", reply
+      refute reply.start_with?("\x00\x00\x00\x00"),
+             "reply still carries the NUL preamble: #{reply.bytes.first(8).inspect}"
+    ensure
+      req.close
+      rep.close
+    end
+  end
+
+
   it "a receive-only wrapper never trains or ships dicts" do
     ep = pair_endpoint
     a_raw = NNQ::PAIR0.new

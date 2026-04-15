@@ -36,8 +36,20 @@ module NNQ
       end
 
 
+      # REQ is cooked: send_request sends and returns the matching
+      # reply body. We must decode that reply through the codec too,
+      # otherwise the caller sees the raw wire (NUL preamble or zstd
+      # magic) instead of the plaintext.
       def send_request(body)
-        send_with_codec(body) { |wire| @sock.send_request(wire) }
+        wire, dict_frames = @codec.encode(body)
+        # Dict frames can't be interleaved on a cooked REQ (strict
+        # alternation), so ship them as separate one-shot requests.
+        # The peer installs them and replies with an empty body which
+        # we discard.
+        dict_frames.each { |df| @sock.send_request(df) }
+        reply = @sock.send_request(wire)
+        return nil if reply.nil?
+        @codec.decode(reply)
       end
 
 
