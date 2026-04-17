@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+- **`zstd+tcp://` is now a transport-layer plugin.** The old
+  `NNQ::Zstd.wrap(socket)` / `NNQ::Zstd::Wrapper` above-socket
+  wrapper is removed. Compression registers itself as
+  `NNQ::Engine.transports["zstd+tcp"]` at `require "nnq/zstd"`
+  time. Usage:
+
+  ```ruby
+  push = NNQ::PUSH0.new
+  push.connect("zstd+tcp://127.0.0.1:5555", level: -3)
+
+  pull = NNQ::PULL0.new
+  pull.bind("zstd+tcp://127.0.0.1:5555")
+  ```
+
+  Per-engine `Codec` instances are cached in a `WeakKeyMap` so all
+  connections on one socket share codec state (critical for dict
+  training across fan-in / fan-out). Wrapping happens post-handshake
+  via `Transport::ZstdTcp.wrap_connection(conn, engine)`, which
+  NNQ's `ConnectionLifecycle` now calls on any transport that
+  implements the hook.
+
+  Migration: replace `sock = NNQ::Zstd.wrap(NNQ::PUSH0.new.connect("tcp://…"))`
+  with `NNQ::PUSH0.new.connect("zstd+tcp://…")`.
+
+- **Codec: single active dict per direction.** The multi-dict
+  registry (`@send_dicts`, `@shipped_peers`, rotating slot, up to
+  `MAX_DICTS = 32`) collapses to a single active send dict and a
+  single recv dict. Each `Codec` now lives on exactly one engine,
+  so there's no peer fan-out for the codec to track — shipping is
+  gated by a simple `@dict_shipped` flag. `encode` returns
+  `[wire, dict_frame]` (single frame, not array). `initialize` takes
+  `dict:` (one dict) rather than `dicts:`. Removes
+  `MAX_DICTS`/`MAX_DICTS_TOTAL_BYTES`; adds `MAX_DICT_SIZE = 32 KiB`
+  guard on incoming dict frames.
+
 ## 0.1.1 — 2026-04-16
 
 - **`Wrapper#send_request` decodes the reply.** Cooked REQ's

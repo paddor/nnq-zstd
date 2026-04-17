@@ -15,8 +15,8 @@ describe NNQ::Zstd::Codec do
 
   it "round-trips a small plaintext body via NUL preamble" do
     c = codec
-    wire, dict_frames = c.encode("hi")
-    assert_equal [], dict_frames
+    wire, dict_frame = c.encode("hi")
+    assert_nil dict_frame
     assert_equal("\x00\x00\x00\x00hi".b, wire)
     assert_equal "hi", c.decode(wire)
   end
@@ -45,7 +45,6 @@ describe NNQ::Zstd::Codec do
     c = codec
     body = Random.bytes(600)
     wire, = c.encode(body)
-    # Incompressible random data: expect NUL preamble bailout.
     assert_equal "\x00\x00\x00\x00".b, wire.byteslice(0, 4)
     assert_equal body, c.decode(wire)
   end
@@ -53,7 +52,6 @@ describe NNQ::Zstd::Codec do
 
   it "rejects a Zstd frame whose header omits Frame_Content_Size" do
     c = codec
-    # Magic + FHD with Single_Segment=0, FCS_flag=0 → no FCS.
     bad = NNQ::Zstd::Codec::ZSTD_MAGIC + "\x00".b + "\x00".b
     assert_raises(NNQ::Zstd::ProtocolError) { c.decode(bad) }
   end
@@ -68,28 +66,28 @@ describe NNQ::Zstd::Codec do
   describe "training" do
     it "trains after ~100 KiB of samples and queues a dict frame" do
       c = codec
-      # Feed many small similar samples until training fires.
-      dict_frames = []
+      dict_frame = nil
       similar_samples(1500).each do |s|
-        _, dfs = c.encode(s)
-        dict_frames.concat(dfs)
-        break unless dict_frames.empty? || c.active_send_dict_id.nil?
+        _, df = c.encode(s)
+        dict_frame ||= df
+        break if dict_frame
       end
-      refute_nil c.active_send_dict_id
-      refute_empty dict_frames
-      # The dict frame is a valid Zstd dictionary.
-      assert_equal NNQ::Zstd::Codec::ZDICT_MAGIC, dict_frames.first.byteslice(0, 4)
+      refute_nil dict_frame
+      assert_equal NNQ::Zstd::Codec::ZDICT_MAGIC, dict_frame.byteslice(0, 4)
     end
 
 
     it "auto-trained dict_id lands in USER_DICT_ID_RANGE" do
       c = codec
+      dict_frame = nil
       similar_samples(1500).each do |s|
-        c.encode(s)
-        break unless c.active_send_dict_id.nil?
+        _, df = c.encode(s)
+        dict_frame ||= df
+        break if dict_frame
       end
-      refute_nil c.active_send_dict_id
-      assert_includes NNQ::Zstd::USER_DICT_ID_RANGE, c.active_send_dict_id
+      refute_nil dict_frame
+      id = dict_frame.byteslice(4, 4).unpack1("V")
+      assert_includes NNQ::Zstd::USER_DICT_ID_RANGE, id
     end
 
 
@@ -104,7 +102,6 @@ describe NNQ::Zstd::Codec do
         raise RuntimeError, "boom"
       end
       begin
-        # 1500 * 100 B > 100 KiB → triggers training exactly once.
         1500.times { c.encode("x" * 100) }
       ensure
         sc.alias_method(:train, :__orig_train)
@@ -112,119 +109,123 @@ describe NNQ::Zstd::Codec do
         _ = original
       end
       assert_equal 1, calls, "train should be called exactly once"
-      assert_nil c.active_send_dict_id
     end
   end
 
 
-  describe "multi-dict peer dispatch" do
-    it "ships dicts before payloads and decodes via dict_id on the peer" do
+  describe "single-dict round-trip" do
+    it "ships dict before payload and decodes via dict on the peer" do
       sender   = codec
       receiver = codec
 
-      # Drive training on the sender.
       similar_samples(1500).each do |s|
-        wire, dfs = sender.encode(s)
-        dfs.each { |df| assert_nil receiver.decode(df) }
-        plain_or_decoded = receiver.decode(wire)
-        refute_nil plain_or_decoded
+        wire, dict_frame = sender.encode(s)
+        if dict_frame
+          assert_nil receiver.decode(dict_frame)
+        end
+        plain = receiver.decode(wire)
+        refute_nil plain
       end
 
-      refute_nil sender.active_send_dict_id
-      assert_includes receiver.recv_dict_ids, sender.active_send_dict_id
-
-      # Now send a post-training small payload that triggers compression.
       msg = "user_4242@example.com|status=active|tier=gold|region=eu-2|extra=" + ("x" * 40)
-      wire, dfs = sender.encode(msg)
-      assert_empty dfs
+      wire, dict_frame = sender.encode(msg)
+      assert_nil dict_frame
       assert_equal NNQ::Zstd::Codec::ZSTD_MAGIC, wire.byteslice(0, 4)
       assert_equal msg, receiver.decode(wire)
     end
 
 
-    it "raises on an unknown dict_id in a frame" do
+    it "raises on compressed frame when receiver has no dict" do
       sender   = codec
       receiver = codec
       similar_samples(1500).each do |s|
         sender.encode(s)
-        break unless sender.active_send_dict_id.nil?
       end
       msg = "user_42@example.com|status=active|tier=gold|region=eu-2|extra=" + ("y" * 40)
       wire, = sender.encode(msg)
-      # receiver has no dicts installed yet
       assert_raises(NNQ::Zstd::ProtocolError) { receiver.decode(wire) }
     end
   end
 
 
-  describe "user-supplied dicts" do
+  describe "dict overwrite" do
+    it "allows a second dict to overwrite the first" do
+      dict_bytes = RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
+      c = codec
+      assert_nil c.decode(dict_bytes)
+      assert_nil c.decode(dict_bytes)
+    end
+  end
+
+
+  describe "user-supplied dict" do
     def trained_dict_bytes
       RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
     end
 
 
-    it "ships supplied dicts and skips training" do
+    it "ships supplied dict and skips training" do
       bytes = trained_dict_bytes
-      c = NNQ::Zstd::Codec.new(level: -3, dicts: [bytes])
-      refute_nil c.active_send_dict_id
+      c = NNQ::Zstd::Codec.new(level: -3, dict: bytes)
       body = "user_42@example.com|status=active|tier=gold|region=eu-2"
-      wire, dfs = c.encode(body)
-      assert_equal 1, dfs.size
-      assert_equal NNQ::Zstd::Codec::ZDICT_MAGIC, dfs.first.byteslice(0, 4)
+      wire, dict_frame = c.encode(body)
+      refute_nil dict_frame
+      assert_equal NNQ::Zstd::Codec::ZDICT_MAGIC, dict_frame.byteslice(0, 4)
 
       receiver = NNQ::Zstd::Codec.new(level: -3)
-      assert_nil receiver.decode(dfs.first)
+      assert_nil receiver.decode(dict_frame)
       assert_equal body, receiver.decode(wire)
     end
 
 
     it "refuses a non-ZDICT-format dict" do
       assert_raises(NNQ::Zstd::ProtocolError) do
-        NNQ::Zstd::Codec.new(level: -3, dicts: ["just some raw bytes that are long enough" * 4])
+        NNQ::Zstd::Codec.new(level: -3, dict: "just some raw bytes that are long enough" * 4)
       end
     end
   end
 
 
-  describe "caps" do
-    def tiny_dict(id)
-      # Minimal ZDICT-format header: magic + dict_id + 4 bytes padding.
-      # zstd accepts these as "short" dicts for our ship/count test — but
-      # building a real trainable dict per id is overkill. Instead,
-      # produce a proper trained dict and patch its id.
-      bytes = RZstd::Dictionary.train(
-        300.times.map { |i| "user_#{i}|key=#{i}|val=#{i * 7}" },
-        capacity: 2 * 1024,
-      )
-      out = bytes.dup.b
-      out[4, 4] = [id].pack("V")
-      out
-    end
-
-
-    it "raises when the 33rd send-side dict is installed" do
-      c = codec
-      32.times { |i| c.send(:install_send_dict, tiny_dict(40_000 + i)) }
+  describe "dict size cap" do
+    it "raises when dict exceeds MAX_DICT_SIZE" do
+      oversized = RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
+      # Pad to exceed 32 KiB while keeping ZDICT magic
+      padded = oversized + ("\x00" * (33 * 1024))
       assert_raises(NNQ::Zstd::ProtocolError) do
-        c.send(:install_send_dict, tiny_dict(99_999))
+        NNQ::Zstd::Codec.new(level: -3, dict: padded)
       end
     end
   end
 
 
-  describe "requeue_all_dicts_for_shipping!" do
-    it "re-emits every known dict on the next encode" do
+  describe "reset_for_reconnect!" do
+    it "re-emits dict on next encode" do
       bytes = RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
-      c = NNQ::Zstd::Codec.new(level: -3, dicts: [bytes])
-      _, dfs = c.encode("first payload " * 20)
-      assert_equal 1, dfs.size
+      c = NNQ::Zstd::Codec.new(level: -3, dict: bytes)
+      _, dict_frame = c.encode("first payload " * 20)
+      refute_nil dict_frame
 
-      _, dfs2 = c.encode("second payload " * 20)
-      assert_empty dfs2
+      _, dict_frame2 = c.encode("second payload " * 20)
+      assert_nil dict_frame2
 
-      c.requeue_all_dicts_for_shipping!
-      _, dfs3 = c.encode("third payload " * 20)
-      assert_equal 1, dfs3.size
+      c.reset_for_reconnect!
+
+      _, dict_frame3 = c.encode("third payload " * 20)
+      refute_nil dict_frame3
+    end
+
+
+    it "does not clear recv dict" do
+      bytes = RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
+      c = NNQ::Zstd::Codec.new(level: -3)
+      assert_nil c.decode(bytes)
+
+      c.reset_for_reconnect!
+
+      sender = NNQ::Zstd::Codec.new(level: -3, dict: bytes)
+      msg = "user_42@example.com|status=active|tier=gold|region=eu-2|extra=" + ("x" * 40)
+      wire, _ = sender.encode(msg)
+      assert_equal msg, c.decode(wire)
     end
   end
 end
