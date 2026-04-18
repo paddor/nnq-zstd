@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-04-18
 
 - **`zstd+tcp://` is now a transport-layer plugin.** The old
   `NNQ::Zstd.wrap(socket)` / `NNQ::Zstd::Wrapper` above-socket
