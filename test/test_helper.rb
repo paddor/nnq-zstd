@@ -6,3 +6,5 @@ require "minitest/autorun"
 require "minitest/spec"
 require "async"
 require "nnq/zstd"
+
+Warning[:experimental] = false
