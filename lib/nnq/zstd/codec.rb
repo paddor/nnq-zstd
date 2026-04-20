@@ -9,7 +9,6 @@ module NNQ
     # the wire message was a dict frame that has been silently installed
     # into the receive-side slot.
     class Codec
-      MAX_DECOMPRESSED_SIZE  = 16 * 1024 * 1024
       MAX_DICT_SIZE          = 32 * 1024
       DICT_CAPACITY          = 8 * 1024
       TRAIN_MAX_SAMPLES      = 1000
@@ -25,7 +24,7 @@ module NNQ
 
       def initialize(level:, dict: nil, recv_max_size: nil)
         @level         = level
-        @recv_max_size = [recv_max_size || MAX_DECOMPRESSED_SIZE, MAX_DECOMPRESSED_SIZE].min
+        @recv_max_size = recv_max_size
 
         @send_dict       = nil
         @send_dict_bytes = nil
@@ -172,7 +171,7 @@ module NNQ
         fcs = parse_frame_content_size(wire)
         raise ProtocolError, "Zstd frame missing Frame_Content_Size" if fcs.nil?
 
-        if fcs > @recv_max_size
+        if @recv_max_size && fcs > @recv_max_size
           raise ProtocolError, "declared FCS #{fcs} exceeds limit #{@recv_max_size}"
         end
 

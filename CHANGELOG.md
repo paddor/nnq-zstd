@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 — 2026-04-20
+
+- **Decompression is bounded by `socket.options.max_message_size`
+  alone.** The old `min(16 MiB, recv_maxsz)` hybrid cap meant
+  `--recv-maxsz 0` (explicit opt-out) still silently imposed a
+  16 MiB ceiling on the compressed path, inconsistent with the
+  plaintext path. The `MAX_DECOMPRESSED_SIZE` constant is removed;
+  `Codec#@recv_max_size` is stored and passed through to
+  `RZstd.decompress` / `Dictionary#decompress` as-is (`nil` →
+  unbounded). The FCS pre-check is now gated on `@recv_max_size`
+  being set. RFC §5.2 updated to match.
+
 ## 0.2.1 — 2026-04-20
 
 - **`ZstdConnection#last_wire_size_in`.** Caches the compressed

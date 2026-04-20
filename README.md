@@ -53,8 +53,10 @@ which rewrite `tcp://` to `zstd+tcp://`.
   (or 100 KiB cumulative sample bytes), then compresses subsequent small
   messages with it and ships the dict once per peer. User-supplied dicts
   (`dict: bytes`) replace training.
-- Decompression is bounded by `min(16 MiB, socket.options.max_message_size)`.
-  Frames whose header omits `Frame_Content_Size` are rejected.
+- Decompression is bounded by `socket.options.max_message_size` — the
+  same cap that guards plaintext recv. `--recv-maxsz 0` (nil on the
+  socket) disables it for compressed payloads too. Frames whose header
+  omits `Frame_Content_Size` are rejected.
 - `ZstdConnection#last_wire_size_in` caches the compressed byte count of
   the last decoded payload frame so nnq's recv loop can surface it to
   `:message_received` verbose monitor events (`(1000B wire=21B)` in

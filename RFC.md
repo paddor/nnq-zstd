@@ -209,10 +209,11 @@ For each Zstd frame:
    store; if absent, raise a protocol error. If zero, decompress
    without a dictionary.
 3. Call Zstandard decompression with a `max_output_size` equal to
-   `min(16 MiB, recv_maxsz)` where `recv_maxsz` is the wrapped
-   socket's own configured maximum inbound message size (an
-   implementation-defined default applies if the socket has no
-   such cap). Exceeding this size is a protocol error.
+   the wrapped socket's own configured maximum inbound message size
+   (`recv_maxsz`). If the socket has no such cap, decompression is
+   unbounded — the caller has opted out of the plaintext cap and
+   the compressed path honors that choice. Exceeding the cap is a
+   protocol error.
 4. Deliver the decompressed plaintext to the application.
 
 ### 5.3 Dictionary installation
