@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 — 2026-04-20
+
+- **`ZstdConnection#last_wire_size_in`.** Caches the compressed
+  byte count of the last payload frame decoded by
+  `#receive_message` (dict-only frames are ignored). Read by the
+  NNQ engine's recv loop to attach `wire_size:` to `:message_received`
+  verbose monitor events — nnq-cli's `-vvv` trace now renders
+  `(1000B wire=21B)` for compressed payloads. Name mirrors the
+  analogous hook in omq-zstd. Requires nnq ≥ 0.8.2.
+
 ## 0.2.0 — 2026-04-18
 
 - **`zstd+tcp://` is now a transport-layer plugin.** The old

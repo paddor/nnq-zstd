@@ -10,9 +10,18 @@ module NNQ
       # every inbound wire message. Dict frames are shipped in-band
       # (first call after training) and silently installed on receive.
       class ZstdConnection < SimpleDelegator
+        # @return [Integer, nil] compressed byte count of the last payload
+        #   frame decoded by {#receive_message}. Ignores dict-only frames.
+        #   Read by the engine's recv loop to attach +wire_size:+ to
+        #   +:message_received+ verbose monitor events. Name mirrors
+        #   omq-zstd's analogous hook.
+        attr_reader :last_wire_size_in
+
+
         def initialize(conn, codec)
           super(conn)
-          @codec = codec
+          @codec             = codec
+          @last_wire_size_in = nil
         end
 
 
@@ -49,7 +58,10 @@ module NNQ
           loop do
             wire    = __getobj__.receive_message
             decoded = @codec.decode(wire)
-            return decoded unless decoded.nil?
+            next if decoded.nil?
+
+            @last_wire_size_in = wire.bytesize
+            return decoded
           end
         end
 
