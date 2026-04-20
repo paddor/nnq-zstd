@@ -189,8 +189,8 @@ describe NNQ::Zstd::Codec do
   describe "dict size cap" do
     it "raises when dict exceeds MAX_DICT_SIZE" do
       oversized = RZstd::Dictionary.train(similar_samples(400), capacity: 8 * 1024)
-      # Pad to exceed 32 KiB while keeping ZDICT magic
-      padded = oversized + ("\x00" * (33 * 1024))
+      # Pad to exceed 64 KiB while keeping ZDICT magic
+      padded = oversized + ("\x00" * (65 * 1024))
       assert_raises(NNQ::Zstd::ProtocolError) do
         NNQ::Zstd::Codec.new(level: -3, dict: padded)
       end

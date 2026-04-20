@@ -9,7 +9,7 @@ module NNQ
     # the wire message was a dict frame that has been silently installed
     # into the receive-side slot.
     class Codec
-      MAX_DICT_SIZE          = 32 * 1024
+      MAX_DICT_SIZE          = 64 * 1024
       DICT_CAPACITY          = 8 * 1024
       TRAIN_MAX_SAMPLES      = 1000
       TRAIN_MAX_BYTES        = 100 * 1024

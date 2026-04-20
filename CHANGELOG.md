@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3 — 2026-04-20
+
+- **RFC rewritten** around the `zstd+tcp://` transport-plugin
+  architecture (the 0.1.x "wrapper" vocabulary is gone). Structured
+  and worded closely after omq-zstd's RFC, adapted for SP's single-
+  frame messages (no multipart, no MORE flag, no ZMTP command
+  frames).
+- **`MAX_DICT_SIZE` raised from 32 KiB to 64 KiB.** Matches omq-zstd
+  and leaves room for larger user-supplied dictionaries. Both the
+  codec check and the RFC §6.2 / §8.3 / §9 cap updated.
+
 ## 0.2.2 — 2026-04-20
 
 - **Decompression is bounded by `socket.options.max_message_size`
